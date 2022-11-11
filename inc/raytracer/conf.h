@@ -38,3 +38,13 @@ typedef struct {
 Conf *parseconf(const char *file);
 void freeconf(Conf *conf);
 void dumpconf(Conf *conf);
+void dumpconfmem();
+
+ConfVal *confobjget(ConfVal *obj, const char *name);
+float confobjgetnum(ConfVal *obj, const char *name, float def);
+ConfVal *confobjgetarr(ConfVal *obj, const char *name);
+const char *confobjgetstr(ConfVal *obj, const char *name, const char *def);
+
+int confarrsize(ConfVal *arr);
+ConfVal *confarrget(ConfVal *arr, int i);
+float confarrgetnum(ConfVal *obj, int i, float def);

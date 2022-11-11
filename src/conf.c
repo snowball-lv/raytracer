@@ -26,6 +26,8 @@ typedef struct {
     Tok cur;
 } Parser;
 
+static Allocator _alloc = {"conf"};
+
 static Tok _nexttok(Parser *p) {
     while (isspace(*p->src))
         p->src++;
@@ -79,14 +81,14 @@ static void expect(Parser *p, int type) {
 }
 
 static ConfVal *newval(int type) {
-    ConfVal *v = malloc(sizeof(ConfVal));
+    ConfVal *v = xmalloc(&_alloc, sizeof(ConfVal));
     memset(v, 0, sizeof(ConfVal));
     v->type = type;
     return v;
 }
 
 static ConfVal *newstr(Tok t) {
-    char *str = malloc(t.len + 1);
+    char *str = xmalloc(&_alloc, t.len + 1);
     memcpy(str, t.str, t.len);
     str[t.len] = 0;
     ConfVal *v = newval(CONF_STR);
@@ -112,15 +114,15 @@ static ConfVal *newarr() {
 
 static void pushkv(ConfObj *obj, Tok key, ConfVal *val) {
     obj->nkvs++;
-    obj->keys = realloc(obj->keys, obj->nkvs * sizeof(ConfVal *));
-    obj->vals = realloc(obj->vals, obj->nkvs * sizeof(ConfVal *));
+    obj->keys = xrealloc(&_alloc, obj->keys, obj->nkvs * sizeof(ConfVal *));
+    obj->vals = xrealloc(&_alloc, obj->vals, obj->nkvs * sizeof(ConfVal *));
     obj->keys[obj->nkvs - 1] = newstr(key);
     obj->vals[obj->nkvs - 1] = val;
 }
 
 static void pushval(ConfArr *arr, ConfVal *val) {
     arr->nvals++;
-    arr->vals = realloc(arr->vals, arr->nvals * sizeof(ConfVal *));
+    arr->vals = xrealloc(&_alloc, arr->vals, arr->nvals * sizeof(ConfVal *));
     arr->vals[arr->nvals - 1] = val;
 }
 
@@ -163,7 +165,7 @@ ConfVal *parseexp(Parser *p) {
 }
 
 Conf *parseconf(const char *file) {
-    Conf *conf = malloc(sizeof(Conf));
+    Conf *conf = xmalloc(&_alloc, sizeof(Conf));
     memset(conf, 0, sizeof(Conf));
     char *src = readfile(file);
     Parser p = {0};
@@ -177,30 +179,33 @@ Conf *parseconf(const char *file) {
 static void freeval(ConfVal *v) {
     switch (v->type) {
     case CONF_STR:
-        free(v->as.str);
+        xfree(v->as.str);
         break;
     case CONF_NUM:
         break;
     case CONF_ARR:
         for (int i = 0; i < v->as.arr.nvals; i++)
             freeval(v->as.arr.vals[i]);
-        free(v->as.arr.vals);
+        if (v->as.arr.nvals)
+            xfree(v->as.arr.vals);
         break;
     case CONF_OBJ:
         for (int i = 0; i < v->as.obj.nkvs; i++) {
             freeval(v->as.obj.keys[i]);
             freeval(v->as.obj.vals[i]);
         }
-        free(v->as.obj.keys);
-        free(v->as.obj.vals);
+        if (v->as.obj.nkvs) {
+            xfree(v->as.obj.keys);
+            xfree(v->as.obj.vals);
+        }
         break;
     }
-    free(v);
+    xfree(v);
 }
 
 void freeconf(Conf *conf) {
     freeval(conf->root);
-    free(conf);
+    xfree(conf);
 }
 
 static void dumpval(ConfVal *v, int indent) {
@@ -236,4 +241,67 @@ void dumpconf(Conf *conf) {
     printf("--- conf dump ---\n");
     dumpval(conf->root, 0);
     printf("\n");
+}
+
+void dumpconfmem() {
+    printf("conf mem usage: %u bytes\n", _alloc.size);
+}
+
+ConfVal *confobjget(ConfVal *obj, const char *name) {
+    if (obj->type != CONF_OBJ) return 0;
+    ConfObj *_obj = &obj->as.obj;
+    for (int i = 0; i < _obj->nkvs; i++) {
+        ConfVal *key = _obj->keys[i];
+        if (key->type != CONF_STR) continue;
+        if (strcmp(key->as.str, name) == 0)
+            return _obj->vals[i];
+    }
+    return 0;
+}
+
+ConfVal *confobjgettype(ConfVal *obj, const char *name, int type) {
+    ConfVal *val = confobjget(obj, name);
+    if (val && val->type == type) return val;
+    return 0;
+}
+
+float confobjgetnum(ConfVal *obj, const char *name, float def) {
+    ConfVal *val = confobjgettype(obj, name, CONF_NUM);
+    if (!val) return def;
+    return val->as.num;
+}
+
+ConfVal *confobjgetarr(ConfVal *obj, const char *name) {
+    return confobjgettype(obj, name, CONF_ARR);
+}
+
+const char *confobjgetstr(ConfVal *obj, const char *name, const char *def) {
+    ConfVal *val = confobjgettype(obj, name, CONF_STR);
+    if (!val) return def;
+    return val->as.str;
+}
+
+int confarrsize(ConfVal *arr) {
+    if (arr && arr->type == CONF_ARR) return arr->as.arr.nvals;
+    return 0;
+}
+
+ConfVal *confarrget(ConfVal *arr, int i) {
+    if (!arr || arr->type != CONF_ARR) return 0;
+    if (i < 0 || i >= arr->as.arr.nvals) return 0;
+    return arr->as.arr.vals[i];
+}
+
+static ConfVal *confarrgettype(ConfVal *arr, int i, int type) {
+    if (!arr || arr->type != CONF_ARR) return 0;
+    if (i < 0 || i >= arr->as.arr.nvals) return 0;
+    ConfVal *val = arr->as.arr.vals[i];
+    if (val->type != type) return 0;
+    return val;
+}
+
+float confarrgetnum(ConfVal *obj, int i, float def) {
+    ConfVal *val = confarrgettype(obj, i, CONF_NUM);
+    if (!val) return def;
+    return val->as.num;
 }

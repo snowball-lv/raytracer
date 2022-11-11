@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <raytracer/util.h>
 #include <raytracer/obj.h>
+#include <raytracer/raytracer.h>
 
 enum {
     T_NONE, T_EOF,

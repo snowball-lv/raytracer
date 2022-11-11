@@ -1,4 +1,5 @@
 #include <math.h>
+#include <raytracer/obj.h>
 #include <raytracer/raytracer.h>
 
 float vmag(Vec3f v) {
