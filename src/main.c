@@ -11,10 +11,6 @@
 #define PI 3.14159265358979323846
 #define MAX_RECUR 1
 
-typedef struct {
-    unsigned char r, g, b;
-} Color;
-
 #define RED (Color){255}
 #define GREEN (Color){0, 255}
 #define BLUE (Color){0, 0, 255}
@@ -44,7 +40,7 @@ static void clear(Bitmap *bmp, Color c) {
             bmp->pixels[y * bmp->width + x] = c;
 }
 
-static void output(Bitmap *bmp, char *file) {
+static void output(Bitmap *bmp, const char *file) {
     FILE *f = fopen(file, "w");
     fprintf(f, "P6\n%i %i\n%i\n", bmp->width, bmp->height, 255);
     for (int y = 0; y < bmp->height; y++) {
@@ -58,28 +54,6 @@ static void output(Bitmap *bmp, char *file) {
 
 static float clamp(float f, float min, float max) {
     return f < min ? min : (f > max ? max : f);
-}
-
-typedef struct {
-    Vec3 pos;
-    float intensity;
-} Light;
-
-struct Scene {
-    float vfov;
-    float aspect;
-    Light *lights;
-    int nlights;
-    Color background;
-    float ambiance;
-    Shape **shapes;
-    int nshapes;
-};
-
-static void addshape(Scene *s, Shape *shape) {
-    s->nshapes++;
-    s->shapes = realloc(s->shapes, s->nshapes * sizeof(Shape *));
-    s->shapes[s->nshapes - 1] = shape;
 }
 
 static float torad(float deg) {
@@ -101,10 +75,6 @@ static int testscene(Scene *s, Ray *r, Hit *h) {
     return success;
 }
 
-static Vec3 colorvec3(Color c) {
-    return vec3(c.r/255.0, c.g/255.0, c.b/255.0);
-}
-
 static Vec3 vclamp(Vec3 v) {
     return vec3(clamp(v.x, 0, 1), clamp(v.y, 0, 1), clamp(v.z, 0, 1));
 }
@@ -112,18 +82,18 @@ static Vec3 vclamp(Vec3 v) {
 static Vec3 xcast(Scene *s, Ray *r, int recur, Hit *xhit) {
     xhit->dist = FLT_MAX;
     Hit hit;
-    if (!testscene(s, r, &hit)) return colorvec3(s->background);
+    if (!testscene(s, r, &hit)) return s->background;
     *xhit = hit;
     Vec3 diffuse = hit.shape->mat.diffuse;
     Vec3 specular = vec3(1.0, 1.0, 1.0);
-    Vec3 ambient = colorvec3(s->background);
+    Vec3 ambient = s->background;
     Vec3 color = vec3(0.0, 0.0, 0.0);
     Vec3 v = vsub(r->orig, hit.point);
     Vec3 vr = vrefl(vsub(hit.point, r->orig), hit.norm);
 
     // lights
     for (int k = 0; k < s->nlights; k++) {
-        Light *light = &s->lights[k];
+        Light *light = s->lights[k];
         Vec3 l = vsub(light->pos, hit.point);
         // occlusion
         {
@@ -178,50 +148,7 @@ static Color cast(Ray *r, Scene *s) {
     return (Color){255 * fc.x, 255 * fc.y, 255 * fc.z};
 }
 
-static Scene *newscene() {
-    Scene *s = malloc(sizeof(Scene));
-    memset(s, 0, sizeof(Scene));
-    return s;
-}
-
-static void freescene(Scene *s) {
-    for (int i = 0; i < s->nshapes; i++)
-        freeshape(s->shapes[i]);
-    if (s->nshapes) free(s->shapes);
-    free(s);
-}
-
-static void render(Bitmap *bmp) {
-    Vec3 lamppos = vec3(1.5, -2, -4);
-    Light lights[] = {
-        {{-2, 2, 0}, 2.0},
-        {lamppos, 1.0},
-    };
-    Scene *scene = newscene();
-    scene->vfov = 90.0;
-    scene->aspect = (float) bmp->width / bmp->height;
-    scene->lights = lights;
-    scene->nlights = sizeof(lights) / sizeof(Light);
-    scene->background = (Color){50, 100, 150};
-    scene->ambiance = 1.0;
-
-    addshape(scene, AS_SHAPE(newsphere(vec3(1, 0, -5), 1)));
-    ShapeSphere *sphere = newsphere(vec3(-1, 0, -3), 1);
-    sphere->shape.mat.reflectiveness = 0.5;
-    sphere->shape.mat.diffuse = vec3(0, 0, 0);
-    addshape(scene, AS_SHAPE(sphere));
-    addshape(scene, AS_SHAPE(newsphere(vec3(1.5, -1, -6), 1)));
-
-    ShapePlane *floor = newplane(vec3(-1, -1.5, 0), vec3(0.5, 1, 0));
-    floor->shape.mat.reflectiveness = 0.1;
-    addshape(scene, AS_SHAPE(floor));
-
-    ShapeMesh *suzanne = newmesh(newobj("suzanne.obj"));
-    shapescale(AS_SHAPE(suzanne), vec3(0.75, 0.75, 0.75));
-    shaperotate(AS_SHAPE(suzanne), vec3(0, 1, 0), 45);
-    shapetranslate(AS_SHAPE(suzanne), vec3(1.5, 1, -3));
-    addshape(scene, AS_SHAPE(suzanne));
-
+static void renderscene(Bitmap *bmp, Scene *scene) {
     float height = tan(torad(scene->vfov / 2)) * 2;
     float width = height * scene->aspect;
     for (int y = 0; y < bmp->height; y++) {
@@ -239,23 +166,21 @@ static void render(Bitmap *bmp) {
             bmp->pixels[y * bmp->width + x] = cast(&ray, scene);
         }
     }
-
-    freescene(scene);
 }
 
 int main(int argc, char **argv) {
     printf("Hello, World!\n");
 
-    Bitmap bmp;
-    int width = 320;
-    int height = 240;
-    // width *= 2;
-    // height *= 2;
-    initbitmap(&bmp, width, height);
-    clear(&bmp, (Color){0});
-    render(&bmp);
-    output(&bmp, "output.ppm");
-    freebitmap(&bmp);
+    for (int i = 1; i < argc; i++) {
+        Scene *s = newscene(argv[i]);
+        Bitmap bmp;
+        initbitmap(&bmp, s->width, s->height);
+        clear(&bmp, (Color){0});
+        renderscene(&bmp, s);
+        output(&bmp, s->output);
+        freebitmap(&bmp);
+        freescene(s);
+    }
 
     return 0;
 }

@@ -65,3 +65,30 @@ int testshape(Shape *s, Ray *r, Hit *h);
 void shapetranslate(Shape *s, Vec3 trans);
 void shaperotate(Shape *s, Vec3 axis, float degrees);
 void shapescale(Shape *s, Vec3 scale);
+
+typedef struct {
+    unsigned char r, g, b;
+} Color;
+
+typedef struct {
+    Vec3 pos;
+    float intensity;
+} Light;
+
+struct Scene {
+    const char *output;
+    int width;
+    int height;
+    float vfov;
+    float aspect;
+    Light **lights;
+    int nlights;
+    Vec3 background;
+    float ambiance;
+    Shape **shapes;
+    int nshapes;
+};
+
+Scene *newscene(const char *file);
+void freescene(Scene *s);
+void addshape(Scene *s, Shape *shape);
