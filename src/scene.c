@@ -27,6 +27,11 @@ static Vec3 getvec(ConfVal *obj, const char *name) {
         confarrgetnum(val, 2, 0));
 }
 
+static void loadmaterial(Material *m, ConfVal *obj) {
+    m->diffuse = getvec(obj, "diffuse");
+    m->reflectiveness = confobjgetnum(obj, "reflectiveness", 0);
+}
+
 static void loadshape(Scene *s, ConfVal *shape) {
     if (shape->type != CONF_OBJ) return;
     const char *type = confobjgetstr(shape, "type", "");
@@ -36,12 +41,18 @@ static void loadshape(Scene *s, ConfVal *shape) {
         float radius = confobjgetnum(shape, "radius", 1);
         ShapeSphere *sphere = newsphere(position, radius);
         addshape(s, AS_SHAPE(sphere));
+        ConfVal *material = confobjget(shape, "material");
+        if (material)
+            loadmaterial(&sphere->shape.mat, material);
     }
     else if (strcmp(type, "plane") == 0) {
         Vec3 point = getvec(shape, "point");
         Vec3 normal = getvec(shape, "normal");
         ShapePlane *plane = newplane(point, normal);
         addshape(s, AS_SHAPE(plane));
+        ConfVal *material = confobjget(shape, "material");
+        if (material)
+            loadmaterial(&plane->shape.mat, material);
     }
     else if (strcmp(type, "mesh") == 0) {
         const char *objfile = confobjgetstr(shape, "objfile", 0);
@@ -52,6 +63,9 @@ static void loadshape(Scene *s, ConfVal *shape) {
         Vec3 position = getvec(shape, "position");
         shapetranslate(AS_SHAPE(mesh), position);
         addshape(s, AS_SHAPE(mesh));
+        ConfVal *material = confobjget(shape, "material");
+        if (material)
+            loadmaterial(&mesh->shape.mat, material);
     }
 }
 
