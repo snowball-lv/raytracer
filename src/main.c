@@ -3,12 +3,13 @@
 #include <math.h>
 #include <float.h>
 #include <string.h>
+#include <raytracer/math.h>
 #include <raytracer/obj.h>
 #include <raytracer/raytracer.h>
 #include <raytracer/conf.h>
 
 #define PI 3.14159265358979323846
-#define MAX_RECUR 3
+#define MAX_RECUR 1
 
 typedef struct {
     unsigned char r, g, b;
@@ -60,26 +61,9 @@ static float clamp(float f, float min, float max) {
 }
 
 typedef struct {
-    Color color;
-} Material;
-
-typedef struct {
-    Vec3f pos;
-    float radius;
-    Material m;
-} Sphere;
-
-typedef struct {
-    Vec3f pos;
+    Vec3 pos;
     float intensity;
 } Light;
-
-typedef struct {
-    Tri *tris;
-    int ntris;
-    Vec3f pos;
-    float radius;
-} Mesh;
 
 struct Scene {
     float vfov;
@@ -87,7 +71,7 @@ struct Scene {
     Light *lights;
     int nlights;
     Color background;
-    float ambient;
+    float ambiance;
     Shape **shapes;
     int nshapes;
 };
@@ -117,18 +101,30 @@ static int testscene(Scene *s, Ray *r, Hit *h) {
     return success;
 }
 
-static Vec3 xcast(Scene *s, Ray *r, int recur) {
+static Vec3 colorvec3(Color c) {
+    return vec3(c.r/255.0, c.g/255.0, c.b/255.0);
+}
+
+static Vec3 vclamp(Vec3 v) {
+    return vec3(clamp(v.x, 0, 1), clamp(v.y, 0, 1), clamp(v.z, 0, 1));
+}
+
+static Vec3 xcast(Scene *s, Ray *r, int recur, Hit *xhit) {
+    xhit->dist = FLT_MAX;
     Hit hit;
-    if (!testscene(s, r, &hit)) return vec3(0.2, 0.3, 0.4);
-    Vec3 color = vec3(1.0, 1.0, 0.0);
-    Vec3f v = vsub(r->orig, hit.point);
-    Vec3f vr = vrefl(vsub(hit.point, r->orig), hit.norm);
-    
+    if (!testscene(s, r, &hit)) return colorvec3(s->background);
+    *xhit = hit;
+    Vec3 diffuse = hit.shape->mat.diffuse;
+    Vec3 specular = vec3(1.0, 1.0, 1.0);
+    Vec3 ambient = colorvec3(s->background);
+    Vec3 color = vec3(0.0, 0.0, 0.0);
+    Vec3 v = vsub(r->orig, hit.point);
+    Vec3 vr = vrefl(vsub(hit.point, r->orig), hit.norm);
+
     // lights
-    float intensity = s->ambient;
     for (int k = 0; k < s->nlights; k++) {
         Light *light = &s->lights[k];
-        Vec3f l = vsub(light->pos, hit.point);
+        Vec3 l = vsub(light->pos, hit.point);
         // occlusion
         {
             Ray ray = {hit.point, vnorm(l)};
@@ -138,31 +134,46 @@ static Vec3 xcast(Scene *s, Ray *r, int recur) {
                 if (lh.dist < vmag(l))
                     continue;
         }
-        Vec3f r = vrefl(vsub(hit.point, light->pos), hit.norm);
-        float light_i = vdot(vnorm(l), hit.norm) * light->intensity;
-        float refl = vdot(vnorm(v), vnorm(r));
-        refl = clamp(refl, 0.0, 1.0);
-        light_i += pow(refl, 16);
-        intensity += clamp(light_i, 0.0, FLT_MAX);
+        float attenuation = 1.0 / vmag(l);
+        float ilight = light->intensity * attenuation;
+        // diffuse
+        {
+            float idiffuse = vdot(vnorm(l), hit.norm);
+            idiffuse = clamp(idiffuse, 0.0, 1.0);
+            idiffuse *= ilight;
+            color = vadd(color, vmul(diffuse, idiffuse));
+        }
+        // specular
+        {
+            Vec3 lr = vrefl(vsub(hit.point, light->pos), hit.norm);
+            float ispecular = vdot(vnorm(v), vnorm(lr));
+            ispecular = clamp(ispecular, 0.0, 1.0);
+            ispecular = pow(ispecular, 16);
+            ispecular *= ilight;
+            color = vadd(color, vmul(specular, ispecular));
+        }
     }
 
     // reflections
     if (recur < MAX_RECUR) {
         Ray ray = {hit.point, vnorm(vr)};
         ray.orig = vadd(ray.orig, vmul(hit.norm, 0.0001));
-        Vec3 rc = xcast(s, &ray, recur + 1);
-        color = vadd(color, vmul(rc, 0.5));
+        Hit rhit;
+        Vec3 rc = xcast(s, &ray, recur + 1, &rhit);
+        float reflectiveness = hit.shape->mat.reflectiveness;
+        // float attenuation = 1.0 / rhit.dist;
+        // attenuation = clamp(attenuation, 0.0, 1.0);
+        // float irefl = attenuation * reflectiveness;
+        float irefl = reflectiveness;
+        color = vadd(color, vmul(rc, irefl));
     }
 
-    return vmul(color, intensity);
+    return color;
 }
 
-static Vec3 vclamp(Vec3 v) {
-    return vec3(clamp(v.x, 0, 1), clamp(v.y, 0, 1), clamp(v.z, 0, 1));
-}
-
-static Color cast(Ray *r, Scene *s, int recur, int *hit) {
-    Vec3 fc = xcast(s, r, recur);
+static Color cast(Ray *r, Scene *s) {
+    Hit hit;
+    Vec3 fc = xcast(s, r, 0, &hit);
     fc = vclamp(fc);
     return (Color){255 * fc.x, 255 * fc.y, 255 * fc.z};
 }
@@ -181,9 +192,10 @@ static void freescene(Scene *s) {
 }
 
 static void render(Bitmap *bmp) {
+    Vec3 lamppos = vec3(1.5, -2, -4);
     Light lights[] = {
-        {{-2, 2, 0}, 1.0},
-        // {{0, 0, 0}, 1.0},
+        {{-2, 2, 0}, 2.0},
+        {lamppos, 1.0},
     };
     Scene *scene = newscene();
     scene->vfov = 90.0;
@@ -191,14 +203,23 @@ static void render(Bitmap *bmp) {
     scene->lights = lights;
     scene->nlights = sizeof(lights) / sizeof(Light);
     scene->background = (Color){50, 100, 150};
-    scene->ambient = 0.3;
+    scene->ambiance = 1.0;
 
     addshape(scene, AS_SHAPE(newsphere(vec3(1, 0, -5), 1)));
-    addshape(scene, AS_SHAPE(newsphere(vec3(-1, 0, -3), 1)));
+    ShapeSphere *sphere = newsphere(vec3(-1, 0, -3), 1);
+    sphere->shape.mat.reflectiveness = 0.5;
+    sphere->shape.mat.diffuse = vec3(0, 0, 0);
+    addshape(scene, AS_SHAPE(sphere));
     addshape(scene, AS_SHAPE(newsphere(vec3(1.5, -1, -6), 1)));
-    addshape(scene, AS_SHAPE(newplane(vec3(-1, -1.5, 0), vec3(0.5, 1, 0))));
+
+    ShapePlane *floor = newplane(vec3(-1, -1.5, 0), vec3(0.5, 1, 0));
+    floor->shape.mat.reflectiveness = 0.1;
+    addshape(scene, AS_SHAPE(floor));
 
     ShapeMesh *suzanne = newmesh(newobj("suzanne.obj"));
+    shapescale(AS_SHAPE(suzanne), vec3(0.75, 0.75, 0.75));
+    shaperotate(AS_SHAPE(suzanne), vec3(0, 1, 0), 45);
+    shapetranslate(AS_SHAPE(suzanne), vec3(1.5, 1, -3));
     addshape(scene, AS_SHAPE(suzanne));
 
     float height = tan(torad(scene->vfov / 2)) * 2;
@@ -215,7 +236,7 @@ static void render(Bitmap *bmp) {
                 },
             };
             ray.dir = vnorm(ray.dir);
-            bmp->pixels[y * bmp->width + x] = cast(&ray, scene, 0, 0);
+            bmp->pixels[y * bmp->width + x] = cast(&ray, scene);
         }
     }
 

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <raytracer/math.h>
 #include <raytracer/obj.h>
 #include <raytracer/raytracer.h>
 
@@ -36,8 +37,8 @@ static int testsphere(Shape *s, Ray *r, Hit *h) {
 static int testplane(Shape *s, Ray *r, Hit *h) {
     ShapePlane *p = (ShapePlane *)s;
     if (vdot(r->dir, p->normal) > 0) return 0;
-    Vec3f vp = vproj(r->dir, p->normal);
-    Vec3f vpp = vproj(vsub(p->point, r->orig), p->normal);
+    Vec3 vp = vproj(r->dir, p->normal);
+    Vec3 vpp = vproj(vsub(p->point, r->orig), p->normal);
     h->shape = s;
     h->point = vadd(r->orig, vmul(r->dir, vmag(vpp) / vmag(vp)));
     h->dist = vmag(vpp) / vmag(vp);
@@ -45,29 +46,29 @@ static int testplane(Shape *s, Ray *r, Hit *h) {
     return 1;
 }
 
-static int plane_intersect(Ray *r, Vec3f p, Vec3f n,
-        Vec3f *ip, float *idist) {
+static int plane_intersect(Ray *r, Vec3 p, Vec3 n,
+        Vec3 *ip, float *idist) {
     if (vdot(r->dir, n) > 0) return 0;
-    Vec3f vp = vproj(r->dir, n);
-    Vec3f vpp = vproj(vsub(p, r->orig), n);
+    Vec3 vp = vproj(r->dir, n);
+    Vec3 vpp = vproj(vsub(p, r->orig), n);
     *ip = vadd(r->orig, vmul(r->dir, vmag(vpp) / vmag(vp)));
     *idist = vmag(vpp) / vmag(vp);
     return 1;
 }
 
 static float tri_area(Tri *tri) {
-    Vec3f ab = vsub(tri->b, tri->a);
-    Vec3f ac = vsub(tri->c, tri->a);
+    Vec3 ab = vsub(tri->b, tri->a);
+    Vec3 ac = vsub(tri->c, tri->a);
     return vmag(vcross(ab, ac)) / 2;
 }
 
 static int tri_intersect(Ray *r, Tri *tri,
-        Vec3f *ip, Vec3f *in, float *idist) {
-    Vec3f ab = vsub(tri->b, tri->a);
-    Vec3f ac = vsub(tri->c, tri->a);
-    // Vec3f cb = vsub(tri->b, tri->c);
-    Vec3f tn = vnorm(vcross(ab, ac));
-    Vec3f plane_ip;
+        Vec3 *ip, Vec3 *in, float *idist) {
+    Vec3 ab = vsub(tri->b, tri->a);
+    Vec3 ac = vsub(tri->c, tri->a);
+    // Vec3 cb = vsub(tri->b, tri->c);
+    Vec3 tn = vnorm(vcross(ab, ac));
+    Vec3 plane_ip;
     float plane_idist;
     if (!plane_intersect(r, tri->a, tn, &plane_ip, &plane_idist))
         return 0;
@@ -87,18 +88,23 @@ static float max(float a, float b) {
     return a > b ? a : b;
 }
 
-static float maxdim(Obj *o) {
-    float m = 0.0;
-    for (int i = 0; i < o->nverts * 3; i++)
-        m = max(m, fabs(o->verts[i]));
-    return m;
+static void setbounds(ShapeMesh *m) {
+    Obj *o = m->obj;
+    m->bounds->center = matrixmul(&m->shape.transform, (Vec3){0, 0, 0});
+    float radius = 0.0;
+    for (int i = 0; i < o->nverts; i++) {
+        float *vp = &o->verts[i * 3];
+        Vec3 v = vec3(vp[0], vp[1], vp[2]);
+        Vec3 vt = matrixmul(&m->shape.transform, v);
+        radius = max(radius, vmag(vsub(vt, m->bounds->center)));
+    }
+    m->bounds->radius = radius;
 }
 
 static int testmesh(Shape *s, Ray *r, Hit *h) {
     ShapeMesh *m = (ShapeMesh *)s;
-    Vec3 trans = vec3(1, 1, -3);
     Hit hit;
-    m->bounds->center = trans;
+    setbounds(m);
     if (!testsphere(AS_SHAPE(m->bounds), r, &hit)) return 0;
     // *h = hit; return 1;
     float last_dist = FLT_MAX;
@@ -108,11 +114,11 @@ static int testmesh(Shape *s, Ray *r, Hit *h) {
         float *v1 = &m->obj->verts[m->obj->tris[i * 3 + 1] * 3];
         float *v2 = &m->obj->verts[m->obj->tris[i * 3 + 2] * 3];
         Tri tri = {
-            vadd((Vec3f){v0[0], v0[1], v0[2]}, trans),
-            vadd((Vec3f){v1[0], v1[1], v1[2]}, trans),
-            vadd((Vec3f){v2[0], v2[1], v2[2]}, trans),
+            matrixmul(&s->transform, (Vec3){v0[0], v0[1], v0[2]}),
+            matrixmul(&s->transform, (Vec3){v1[0], v1[1], v1[2]}),
+            matrixmul(&s->transform, (Vec3){v2[0], v2[1], v2[2]}),
         };
-        Vec3f ip, in;
+        Vec3 ip, in;
         float idist;
         if (!tri_intersect(r, &tri, &ip, &in, &idist)) continue;
         if (idist > last_dist) continue;
@@ -130,6 +136,9 @@ static void *newshape(int type, int size) {
     Shape *s = malloc(size);
     memset(s, 0, size);
     s->type = type;
+    s->mat.diffuse = vec3(1.0, 0.5, 0.0);
+    s->mat.reflectiveness = 0.25;
+    matrixinit(&s->transform);
     return s;
 }
 
@@ -152,9 +161,21 @@ ShapePlane *newplane(Vec3 point, Vec3 normal) {
 ShapeMesh *newmesh(Obj *obj) {
     ShapeMesh *m = newshape(SHAPE_MESH, sizeof(ShapePlane));
     m->obj = obj;
-    m->bounds = newsphere(vec3(0, 0, 0), maxdim(obj));
+    m->bounds = newsphere(vec3(0, 0, 0), 0);
     m->shape.test = testmesh;
     return m;
+}
+
+void shapetranslate(Shape *s, Vec3 trans) {
+    matrixtranslate(&s->transform, trans);
+}
+
+void shaperotate(Shape *s, Vec3 axis, float degrees) {
+    matrixrotate(&s->transform, axis, degrees);
+}
+
+void shapescale(Shape *s, Vec3 scale) {
+    matrixscale(&s->transform, scale);
 }
 
 void freeshape(Shape *shape) {
